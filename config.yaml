@@ -1,0 +1,83 @@
+service:
+  name: jarvis-v2
+  port: 18793
+  host: 127.0.0.1
+  base_url: https://translate.dream-code.app
+  path_prefix: /v2
+
+audio:
+  encoding: mulaw
+  sample_rate: 8000
+  frame_ms: 20
+  frame_bytes: 160
+  jitter_buffer_ms: 100
+
+stt:
+  provider: deepgram
+  model: nova-3
+  # Jarvis-lite lock: German only. "multi" caused language-thrashing.
+  language: de
+  allowed_langs: [de]
+  interim_results: true
+  utterance_end_ms: 1000
+  endpointing: 500          # back to standard
+  vad_events: true
+  smart_format: true
+  post_utterance_hold_ms: 0  # disabled; 600ms created unnecessary lag
+  barge_in: false
+
+tts:
+  provider: deepgram
+  # All three slots point at julius-de for the lite build: no code path should
+  # switch voices; any detected non-DE language still gets julius.
+  voices:
+    de: aura-2-julius-de
+    en: aura-2-julius-de
+    tr: aura-2-julius-de
+  fallback_tr: aura-2-julius-de
+  encoding: mulaw
+  sample_rate: 8000
+  container: none
+  # speed parameter not supported by Aura-2 as URL param — produces HTTP 400.
+  # Omitted. If rate control is needed, use SSML in the text body (not impl).
+
+brain:
+  provider: anthropic
+  # NOTE: Spec called for claude-sonnet-4-7 but the Anthropic API returned 404
+  # for that ID during live bring-up (2026-04-22). We use sonnet-4-6 as primary
+  # with 4-5 as fallback. When 4-7 becomes available, flip primary_model.
+  primary_model: claude-sonnet-4-6
+  fallback_model: claude-sonnet-4-5-20250929
+  max_tokens: 2000
+  max_tool_iterations: 5
+  history_keep_turns: 30
+
+auth:
+  owner_whitelist:
+    - "+13073176655"    # Askin's actual caller-ID (verified from live logs 2026-04-22)
+    - "+13076670667"    # keep as fallback (old Twilio number?)
+  passphrase_fuzzy_ratio: 0.75
+  default_language: de  # owner's primary language; bot defaults to DE
+
+cost:
+  per_call_cap_usd: 5.0
+  warn_ratio: 0.75
+  hangup_ratio: 1.0
+  rates:
+    twilio_voice_per_min: 0.0085
+    twilio_conf_per_min: 0.002
+    deepgram_stt_per_min: 0.0077
+    deepgram_tts_per_1k_chars: 0.030
+    claude_input_per_mtok: 3.00
+    claude_output_per_mtok: 15.00
+
+conference:
+  beep: false
+  start_on_enter_user: true
+  end_on_exit_user: true
+  record: false
+
+log:
+  path: /var/log/jarvis-v2/app.log
+  level: INFO
+  format: json

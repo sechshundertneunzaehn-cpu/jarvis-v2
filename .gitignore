@@ -1,0 +1,17 @@
+.env
+.env.*
+*.key
+*.pem
+secrets/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+logs/
+/var/log/**
+.bak.*
+*.bak.*
+contacts/contacts.yaml.bak.*
+.DS_Store
+node_modules/

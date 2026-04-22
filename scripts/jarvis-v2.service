@@ -1,0 +1,18 @@
+[Unit]
+Description=Jarvis v2 (Twilio Voice Assistant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jarvis-v2
+EnvironmentFile=/opt/jarvis-v2/.env
+ExecStart=/opt/jarvis-v2/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18793 --log-level info
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/jarvis-v2/stdout.log
+StandardError=append:/var/log/jarvis-v2/stderr.log
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
