@@ -23,7 +23,6 @@ from .audio import (
     FRAME_SECONDS,
     mulaw_to_twilio_media_payload,
     twilio_media_payload_to_mulaw,
-    mulaw_scale,
 )
 from .session import Phase, Session
 
@@ -206,14 +205,12 @@ async def run_stream_leg(
                     if sess.phase == Phase.BRIDGED:
                         await hub.send("target", mulaw)
                 elif role == "target":
-                    # STT (interpreter mode) gets ORIGINAL audio; user-out gets dimmed copy.
+                    # Target → user (always once streaming), → STT only in interpreter mode
+                    await hub.send("user", mulaw)
                     if sess.mode.value == "interpreter":
                         stt = getattr(sess, "stt", None)
                         if stt:
                             await stt.feed(mulaw)
-                    _gain = 0.2 if getattr(sess, "tts_active", False) else 0.5
-                    _dimmed = mulaw_scale(mulaw, _gain)
-                    await hub.send("user", _dimmed)
                     if sess.phase == Phase.DIALING:
                         sess.phase = Phase.BRIDGED
             elif ev == "stop":
@@ -303,7 +300,6 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
                 }
             )
         )
-        sess.tts_active = True  # type: ignore[attr-defined]
         try:
             for sentence in sentences:
                 async for frame in tts.stream(sentence, lang="de"):
@@ -314,8 +310,6 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
             raise
         except Exception:
             logger.exception('"tts stream failed"')
-        finally:
-            sess.tts_active = False  # type: ignore[attr-defined]
 
     async def on_final_transcript(text: str, lang: Optional[str]) -> None:
         if not text.strip():

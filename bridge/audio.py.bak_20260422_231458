@@ -100,12 +100,3 @@ def twilio_media_payload_to_mulaw(payload_b64: str) -> bytes:
 
 def mulaw_to_twilio_media_payload(mulaw: bytes) -> str:
     return base64.b64encode(mulaw).decode("ascii")
-
-
-def mulaw_scale(frame: bytes, gain: float) -> bytes:
-    """Scale µ-law frame by linear gain. Roundtrips via pcm16 (audioop.mul clips)."""
-    if not frame or gain == 1.0:
-        return frame
-    pcm = audioop.ulaw2lin(frame, 2)
-    scaled = audioop.mul(pcm, 2, gain)
-    return audioop.lin2ulaw(scaled, 2)

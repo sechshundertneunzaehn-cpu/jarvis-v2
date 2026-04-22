@@ -51,7 +51,6 @@ class Session:
     ended_at: Optional[float] = None
     cost_usd: float = 0.0
     last_language: str = "de"
-    tts_active: bool = False
     cost_meter: object = None  # CostMeter injected at session creation
 
     def add_leg(self, role: str, call_sid: Optional[str] = None) -> Leg:
