@@ -214,6 +214,8 @@ async def run_stream_leg(
                         stt = getattr(sess, "stt", None)
                         if stt:
                             await stt.feed(mulaw)
+                    if getattr(sess, "tts_active", False):
+                        continue
                     _gain = 0.15 if getattr(sess, "tts_active", False) else 0.35
                     _dimmed = mulaw_scale(mulaw, _gain)
                     await hub.send("user", _dimmed)
@@ -310,7 +312,7 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
         try:
             for sentence in sentences:
                 async for frame in tts.stream(sentence, lang="de"):
-                    boosted = mulaw_scale(frame, 1.25)
+                    boosted = frame
                     await hub.send("user", boosted)
                     if "target" in hub._queues:
                         await hub.send("target", boosted)
@@ -361,7 +363,7 @@ async def _greet(sess: Session, hub: AudioHub) -> None:
         text = "Hallo. Wer spricht bitte?"
     try:
         async for frame in tts.stream(text, lang="de"):
-            boosted = mulaw_scale(frame, 1.25)
+            boosted = frame
             await hub.send("user", boosted)
             if "target" in hub._queues:
                 await hub.send("target", boosted)
