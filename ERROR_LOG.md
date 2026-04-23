@@ -54,3 +54,9 @@ Symptom: CLAUDE_EXIT=124 Timeout nach 10 Min bei F1A+F2 kombiniert.
 Root Cause: Prompt_008 enthielt zweite STT (F1A) UND gerichtetes TTS (F2) in einem Schritt; Umfang sprengte 10-Min-Fenster.
 Lesson: Features kleiner schneiden. Erst zweite STT-Instanz + reine Log-Events (F1A), dann erst TTS-Routing (F2). Uncommitted F2-Reste in git stash geparkt.
 Fix-Commit: F1A - sess.stt_target + _ensure/_close_stt_target + on_target_final-Log-Event, KEIN _run_turn fuer target. F2 kommt in Prompt_010.
+
+## E-009: F2 gerichtetes TTS (Uebersetzung) (2026-04-23)
+Symptom: Vorher hoerte der User seine eigene EN-Uebersetzung auf seinem Leg mit; Target sprach nie.
+Root Cause: Interpreter-Mode hatte keinen Translate-Pfad; _run_turn lief immer durch den Assistant-Claude und schickte TTS an beide Sinks.
+Lesson: Dolmetscher braucht gerichtete TTS-Sinks - User-Turn NUR an target, Target-Turn NUR an user. Und echte Translation via schlankem single-turn Claude-Call (keine Tools, keine History).
+Fix-Commit: F2 - brain/claude_agent.py add translate_only(src,dst); bridge/session_runner.py _run_turn branches on sess.mode (interpreter->translate + hub.send('target') only); new _run_translation for target->user (hub.send('user') only); on_target_final dispatches _run_translation.
