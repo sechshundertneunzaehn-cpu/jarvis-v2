@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 
 from fastapi import WebSocket
@@ -207,7 +208,9 @@ async def run_stream_leg(
                         await hub.send("target", mulaw)
                 elif role == "target":
                     # STT (interpreter mode) gets ORIGINAL audio; user-out gets dimmed copy.
-                    if sess.mode.value == "interpreter":
+                    # F1B: Target -> STT-Feed per Default AUS (blockiert Endpointing).
+                    #      Aktivieren via JARVIS_TARGET_TO_STT=true (Dolmetscher-Feature WIP).
+                    if sess.mode.value == "interpreter" and os.getenv("JARVIS_TARGET_TO_STT", "false").lower() in ("true", "1", "yes"):
                         stt = getattr(sess, "stt", None)
                         if stt:
                             await stt.feed(mulaw)
