@@ -211,7 +211,7 @@ async def run_stream_leg(
                         stt = getattr(sess, "stt", None)
                         if stt:
                             await stt.feed(mulaw)
-                    _gain = 0.2 if getattr(sess, "tts_active", False) else 0.5
+                    _gain = 0.15 if getattr(sess, "tts_active", False) else 0.35
                     _dimmed = mulaw_scale(mulaw, _gain)
                     await hub.send("user", _dimmed)
                     if sess.phase == Phase.DIALING:
@@ -307,9 +307,10 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
         try:
             for sentence in sentences:
                 async for frame in tts.stream(sentence, lang="de"):
-                    await hub.send("user", frame)
-                    if sess.phase == Phase.BRIDGED:
-                        await hub.send("target", frame)
+                    boosted = mulaw_scale(frame, 1.25)
+                    await hub.send("user", boosted)
+                    if "target" in hub._queues:
+                        await hub.send("target", boosted)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -357,6 +358,9 @@ async def _greet(sess: Session, hub: AudioHub) -> None:
         text = "Hallo. Wer spricht bitte?"
     try:
         async for frame in tts.stream(text, lang="de"):
-            await hub.send("user", frame)
+            boosted = mulaw_scale(frame, 1.25)
+            await hub.send("user", boosted)
+            if "target" in hub._queues:
+                await hub.send("target", boosted)
     except Exception:
         logger.exception('"greet failed"')
