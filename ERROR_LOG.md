@@ -48,3 +48,9 @@ Lesson: USER COMMITED 2026-04-23 - JARVIS DARF NIE AUTONOM AUFLEGEN. NUR EXPLIZI
 Fix-Commit: F1D - (a) System-Prompt verbietet autonomes Auflegen hart, (b) brain/tools.py _hangup() prueft letzte User-Text-Turns auf Hangup-Phrasen und blockiert sonst mit hangup_trigger reason=blocked_no_explicit_user_command, (c) hangup-Schema-Description erweitert.
 
 <-- Neue Eintraege unten anfuegen -->
+
+## E-008: Prompt_008 zu gross fuer Sprint (2026-04-23)
+Symptom: CLAUDE_EXIT=124 Timeout nach 10 Min bei F1A+F2 kombiniert.
+Root Cause: Prompt_008 enthielt zweite STT (F1A) UND gerichtetes TTS (F2) in einem Schritt; Umfang sprengte 10-Min-Fenster.
+Lesson: Features kleiner schneiden. Erst zweite STT-Instanz + reine Log-Events (F1A), dann erst TTS-Routing (F2). Uncommitted F2-Reste in git stash geparkt.
+Fix-Commit: F1A - sess.stt_target + _ensure/_close_stt_target + on_target_final-Log-Event, KEIN _run_turn fuer target. F2 kommt in Prompt_010.
