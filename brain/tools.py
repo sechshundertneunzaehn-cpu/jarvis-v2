@@ -33,7 +33,12 @@ TOOL_SCHEMAS: list[dict] = [
     },
     {
         "name": "hangup",
-        "description": "End the call, or selectively drop one leg.",
+        "description": (
+            "End the call, or selectively drop one leg. DO NOT call this tool unless the user has "
+            "explicitly said leg auf / auflegen / beende den Anruf / hang up / end call "
+            "or a clear equivalent in the most recent turn. Never call it on silence, pauses, "
+            "mode-switches, or because the conversation seems finished."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -114,6 +119,44 @@ TOOL_SCHEMAS: list[dict] = [
 ]
 
 
+
+HANGUP_PHRASES: tuple[str, ...] = (
+    "leg auf",
+    "legst auf",
+    "auflegen",
+    "leg den anruf auf",
+    "beende den anruf",
+    "beende das gespräch",
+    "beende das gespraech",
+    "beenden wir",
+    "hang up",
+    "hangup",
+    "end call",
+    "end the call",
+    "drop the call",
+    "kapat",
+    "telefonu kapat",
+)
+
+
+def _last_user_text(sess, lookback: int = 6) -> str:
+    texts: list[str] = []
+    for m in reversed(sess.history or []):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+            if len(texts) >= lookback:
+                break
+    return "\n".join(reversed(texts)).lower()
+
+
+def _user_asked_for_hangup(sess) -> bool:
+    tail = _last_user_text(sess)
+    return any(p in tail for p in HANGUP_PHRASES)
+
+
 async def dispatch(tool_name: str, args: dict, *, sess, app_state) -> dict:
     try:
         if tool_name == "dial_contact":
@@ -177,6 +220,24 @@ async def _dial_contact(args: dict, sess, app_state) -> dict:
 
 async def _hangup(args: dict, sess, app_state) -> dict:
     target = args.get("target", "all")
+    if not _user_asked_for_hangup(sess):
+        logger.info(json.dumps({
+            "event": "hangup_trigger",
+            "pair_id": getattr(sess, "pair_id", None),
+            "reason": "blocked_no_explicit_user_command",
+            "target": target,
+            "last_user_text": _last_user_text(sess)[-200:],
+        }))
+        return {
+            "ok": False,
+            "error": "hangup blocked: user did not explicitly ask to hang up. Only call hangup when the user says leg auf/auflegen/hang up/end call or clear equivalent.",
+        }
+    logger.info(json.dumps({
+        "event": "hangup_trigger",
+        "pair_id": getattr(sess, "pair_id", None),
+        "reason": "explicit_user_command",
+        "target": target,
+    }))
     from twilio.rest import Client as TwilioClient
 
     client = TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
