@@ -53,6 +53,11 @@ class Session:
     last_language: str = "de"
     tts_active: bool = False
     cost_meter: object = None  # CostMeter injected at session creation
+    # F1A: second STT instance for target-leg when in interpreter mode.
+    user_lang: str = "de"
+    target_lang: str = "en"
+    stt_target: object = None
+    stt_target_task: object = None
 
     def add_leg(self, role: str, call_sid: Optional[str] = None) -> Leg:
         leg = Leg(role=role, call_sid=call_sid, joined_at=time.time())

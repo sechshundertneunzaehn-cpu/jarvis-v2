@@ -26,7 +26,7 @@ from .audio import (
     twilio_media_payload_to_mulaw,
     mulaw_scale,
 )
-from .session import Phase, Session
+from .session import Mode, Phase, Session
 
 
 _SENTENCE_END = re.compile(r"([\.!\?;…:])\s+|([\.!\?;…])$")
@@ -53,6 +53,53 @@ def _split_sentences(text: str) -> list[str]:
     return parts
 
 logger = logging.getLogger("bridge.runner")
+
+
+async def _ensure_stt_target(sess, app_state) -> None:
+    """F1A: lazy-init second Deepgram STT instance for target leg."""
+    if getattr(sess, "stt_target", None) is not None:
+        return
+    try:
+        from stt.deepgram_ws import DeepgramSTT
+    except Exception as exc:
+        logger.warning(json.dumps({"event": "stt_target_import_fail", "err": str(exc)}))
+        return
+    base_cfg = app_state.config.get("stt", {})
+    cfg = dict(base_cfg)
+    cfg["language"] = sess.target_lang or "en"
+    stt_t = DeepgramSTT(cfg)
+    sess.stt_target = stt_t
+    on_final = getattr(sess, "on_target_final", None)
+    if on_final is None:
+        logger.warning(json.dumps({"event": "stt_target_no_callback", "pair_id": sess.pair_id}))
+        return
+    sess.stt_target_task = asyncio.create_task(stt_t.run(on_final))
+    logger.info(json.dumps({
+        "event": "stt_target_started",
+        "pair_id": sess.pair_id,
+        "lang": cfg["language"],
+    }))
+
+
+async def _close_stt_target(sess) -> None:
+    """F1A: teardown target-leg STT on mode-switch back or leg end."""
+    stt_t = getattr(sess, "stt_target", None)
+    if stt_t is None:
+        return
+    try:
+        await stt_t.close()
+    except Exception:
+        pass
+    sess.stt_target = None
+    task = getattr(sess, "stt_target_task", None)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except Exception:
+            pass
+    sess.stt_target_task = None
+    logger.info(json.dumps({"event": "stt_target_closed", "pair_id": getattr(sess, "pair_id", "?")}))
 
 
 class AudioHub:
@@ -207,16 +254,20 @@ async def run_stream_leg(
                     if sess.phase == Phase.BRIDGED:
                         await hub.send("target", mulaw)
                 elif role == "target":
-                    # STT (interpreter mode) gets ORIGINAL audio; user-out gets dimmed copy.
-                    # F1B: Target -> STT-Feed per Default AUS (blockiert Endpointing).
-                    #      Aktivieren via JARVIS_TARGET_TO_STT=true (Dolmetscher-Feature WIP).
-                    if sess.mode.value == "interpreter" and os.getenv("JARVIS_TARGET_TO_STT", "false").lower() in ("true", "1", "yes"):
-                        stt = getattr(sess, "stt", None)
-                        if stt:
-                            await stt.feed(mulaw)
+                    # F1A: second STT-instance for target leg; only active in interpreter mode.
+                    if sess.mode == Mode.INTERPRETER:
+                        if getattr(sess, "stt_target", None) is None:
+                            await _ensure_stt_target(sess, app_state)
+                        stt_t = getattr(sess, "stt_target", None)
+                        # Anti-Loop: do not feed while Jarvis-TTS is speaking out.
+                        if stt_t and not getattr(sess, "tts_active", False):
+                            await stt_t.feed(mulaw)
+                    else:
+                        if getattr(sess, "stt_target", None) is not None:
+                            await _close_stt_target(sess)
                     if getattr(sess, "tts_active", False):
                         continue
-                    _gain = 0.15 if getattr(sess, "tts_active", False) else 0.35
+                    _gain = 0.35
                     _dimmed = mulaw_scale(mulaw, _gain)
                     await hub.send("user", _dimmed)
                     if sess.phase == Phase.DIALING:
@@ -243,6 +294,10 @@ async def run_stream_leg(
                     await stt.close()
                 except Exception:
                     pass
+            try:
+                await _close_stt_target(sess)
+            except Exception:
+                pass
             tts = getattr(sess, "tts", None)
             if tts:
                 try:
@@ -349,6 +404,18 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
             hub.flush("target")
         sess.current_turn_task = asyncio.create_task(_run_turn(text))  # type: ignore[attr-defined]
 
+    # F1A: target-leg STT callback - log event only, no _run_turn (F2).
+    async def on_target_final(text: str, lang) -> None:
+        if not text or not text.strip():
+            return
+        logger.info(json.dumps({
+            "event": "target_transcript",
+            "pair_id": sess.pair_id,
+            "lang": lang,
+            "text": text[:300],
+        }))
+
+    sess.on_target_final = on_target_final  # type: ignore[attr-defined]
     # Barge-in disabled: no on_speech_started callback registered.
     sess.stt_task = asyncio.create_task(stt.run(on_final_transcript))  # type: ignore[attr-defined]
 
