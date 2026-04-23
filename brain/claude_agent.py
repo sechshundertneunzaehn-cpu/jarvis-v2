@@ -32,6 +32,31 @@ class ClaudeAgent:
             # keep newest keep_turns*2 messages, drop the rest
             self.sess.history = self.sess.history[-self.keep_turns * 2 :]
 
+    async def translate_only(self, text: str, src: str, dst: str) -> str:
+        """F2: single-turn translation - no tools, no history, no streaming."""
+        system = (
+            f"You are a professional interpreter. Translate the following text from {src} to {dst}.\n"
+            "Respond with ONLY the translation, no preamble, no explanation, no quotes."
+        )
+        user_msg = f"Text: {text}"
+        for attempt in (self.primary, self.fallback):
+            try:
+                resp = await self.client.messages.create(
+                    model=attempt,
+                    max_tokens=min(self.max_tokens, 500),
+                    system=system,
+                    messages=[{"role": "user", "content": user_msg}],
+                )
+                out = ""
+                for block in getattr(resp, "content", []) or []:
+                    if getattr(block, "type", None) == "text":
+                        out += getattr(block, "text", "") or ""
+                return out.strip()
+            except Exception:
+                logger.exception("translate_only failed on %s", attempt)
+                continue
+        return ""
+
     async def respond(self, user_text: str, lang: str = "de") -> AsyncIterator[str]:
         """Run one agent turn → yield text chunks (already spoken-ready)."""
         self.sess.history.append({"role": "user", "content": user_text})

@@ -328,7 +328,51 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
     stt_cfg = app_state.config["stt"]
 
     async def _run_turn(text: str) -> None:
-        """One serialized user-turn: STT-final → agent → TTS → outbound frames."""
+        """User-turn dispatcher. Interpreter-mode: translate user_lang->target_lang,
+        TTS ONLY to target sink. Assistant-mode: unchanged."""
+        if sess.mode == Mode.INTERPRETER:
+            src_lang = sess.user_lang or "de"
+            dst_lang = sess.target_lang or "en"
+            logger.info(json.dumps({
+                "event": "interpret_user",
+                "pair_id": sess.pair_id,
+                "src": src_lang,
+                "dst": dst_lang,
+                "text": text[:300],
+            }))
+            try:
+                translation = await agent.translate_only(text, src_lang, dst_lang)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception('"translate_only (user->target) failed"')
+                return
+            if not translation.strip():
+                logger.info(json.dumps({
+                    "event": "interpret_empty",
+                    "pair_id": sess.pair_id,
+                    "sender": "user",
+                }))
+                return
+            logger.info(json.dumps({
+                "event": "interpret_user_done",
+                "pair_id": sess.pair_id,
+                "text": translation[:300],
+            }))
+            sentences = _split_sentences(translation) or [translation]
+            sess.tts_active = True  # type: ignore[attr-defined]
+            try:
+                for sentence in sentences:
+                    async for frame in tts.stream(sentence, lang=dst_lang):
+                        await hub.send("target", frame)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception('"interpreter tts (target) failed"')
+            finally:
+                sess.tts_active = False  # type: ignore[attr-defined]
+            return
+
         sess.last_language = "de"  # hard lock
         logger.info(
             json.dumps(
@@ -378,6 +422,50 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
         finally:
             sess.tts_active = False  # type: ignore[attr-defined]
 
+    async def _run_translation(text: str, sender_role: str) -> None:
+        """F2: target-leg translation. target_lang->user_lang, TTS ONLY to user sink."""
+        src_lang = sess.target_lang or "en"
+        dst_lang = sess.user_lang or "de"
+        logger.info(json.dumps({
+            "event": "interpret_target",
+            "pair_id": sess.pair_id,
+            "sender": sender_role,
+            "src": src_lang,
+            "dst": dst_lang,
+            "text": text[:300],
+        }))
+        try:
+            translation = await agent.translate_only(text, src_lang, dst_lang)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('"translate_only (target->user) failed"')
+            return
+        if not translation.strip():
+            logger.info(json.dumps({
+                "event": "interpret_empty",
+                "pair_id": sess.pair_id,
+                "sender": sender_role,
+            }))
+            return
+        logger.info(json.dumps({
+            "event": "interpret_target_done",
+            "pair_id": sess.pair_id,
+            "text": translation[:300],
+        }))
+        sentences = _split_sentences(translation) or [translation]
+        sess.tts_active = True  # type: ignore[attr-defined]
+        try:
+            for sentence in sentences:
+                async for frame in tts.stream(sentence, lang=dst_lang):
+                    await hub.send("user", frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception('"interpreter tts (user) failed"')
+        finally:
+            sess.tts_active = False  # type: ignore[attr-defined]
+
     async def on_final_transcript(text: str, lang: Optional[str]) -> None:
         if not text.strip():
             return
@@ -404,9 +492,11 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
             hub.flush("target")
         sess.current_turn_task = asyncio.create_task(_run_turn(text))  # type: ignore[attr-defined]
 
-    # F1A: target-leg STT callback - log event only, no _run_turn (F2).
+    # F2: target-leg STT final -> translate target_lang->user_lang, TTS only to user.
     async def on_target_final(text: str, lang) -> None:
         if not text or not text.strip():
+            return
+        if sess.mode != Mode.INTERPRETER:
             return
         logger.info(json.dumps({
             "event": "target_transcript",
@@ -414,6 +504,16 @@ async def _init_ai_pipeline(sess: Session, app_state, hub: AudioHub) -> None:
             "lang": lang,
             "text": text[:300],
         }))
+        prev = getattr(sess, "current_turn_task", None)
+        if prev and not prev.done():
+            prev.cancel()
+            try:
+                await prev
+            except (asyncio.CancelledError, Exception):
+                pass
+        hub.flush("user")
+        hub.flush("target")
+        sess.current_turn_task = asyncio.create_task(_run_translation(text, "target"))  # type: ignore[attr-defined]
 
     sess.on_target_final = on_target_final  # type: ignore[attr-defined]
     # Barge-in disabled: no on_speech_started callback registered.
